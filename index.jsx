@@ -76,7 +76,7 @@ export const render = ({ output, error }) => {
       if (!groups[repo]) groups[repo] = [];
       groups[repo].push(pr);
     });
-    return Object.keys(groups).sort().map(function(repo) {
+    return Object.keys(groups).map(function(repo) {
       var prs = groups[repo].sort(function(a, b) {
         var aReviewed = a.myReviewState ? 1 : 0;
         var bReviewed = b.myReviewState ? 1 : 0;

@@ -206,16 +206,22 @@ def main():
 
     repos_str = ""
     with open(config_path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("PR_REPOS="):
-                repos_str = line.split("=", 1)[1].strip().strip('"').strip("'")
+        content = f.read()
+    # Extraer valor de PR_REPOS (soporta valor en línea o multilínea con comillas)
+    import re
+    match = re.search(r'PR_REPOS=["\'](.*?)["\']', content, re.DOTALL)
+    if match:
+        repos_str = match.group(1)
 
     if not repos_str or "yourname" in repos_str:
         print('{"toReview":[],"mine":[],"error":"NO_REPOS"}')
         return
 
-    repo_paths = [p.strip() for p in repos_str.split("|") if p.strip()]
+    # Soporta separador | o salto de línea, ignora comentarios (#)
+    repo_paths = [
+        p.strip() for p in repos_str.replace("|", "\n").splitlines()
+        if p.strip() and not p.strip().startswith("#")
+    ]
 
     all_to_review = []
     all_mine = []
