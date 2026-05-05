@@ -21,8 +21,15 @@ def get_repo_info(repo_path):
         capture_output=True, text=True, cwd=repo_path
     )
     url = result.stdout.strip()
+    # HTTPS: https://github.com/owner/repo.git
     if "github.com/" in url:
         parts = url.split("github.com/")[-1].replace(".git", "").split("/")
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    # SSH con alias: git@github.com-emu:owner/repo.git
+    if ":" in url and "/" in url:
+        slug = url.split(":")[-1].replace(".git", "")
+        parts = slug.split("/")
         if len(parts) >= 2:
             return parts[0], parts[1]
     return None, None
@@ -68,7 +75,8 @@ def serialize_pr(pr, days, reviews, owner, repo_name):
         "changesRequested": rev["CHANGES_REQUESTED"],
         "commented": rev["COMMENTED"],
         "reviewers": reviewer_logins[:5],
-        "url": f"https://github.com/{owner}/{repo_name}/pull/{pr['number']}"
+        "url": f"https://github.com/{owner}/{repo_name}/pull/{pr['number']}",
+        "repo": repo_name
     }
 
 GRAPHQL_QUERY = """
@@ -80,7 +88,6 @@ query($owner: String!, $repo: String!) {
         title
         isDraft
         createdAt
-        readyForReviewAt
         headRefName
         author { login }
         labels(first: 5) { nodes { name } }
@@ -142,6 +149,16 @@ def fetch_prs(repo_path):
 
         pr_data = serialize_pr(pr, days, reviews, owner, repo_name)
         pr_data["myReviewState"] = my_review_state
+
+        # Detectar si el owner respondió después del último review del usuario
+        owner_responded = False
+        if my_reviews:
+            my_last_ts = my_reviews[-1].get("submittedAt", "")
+            owner_reviews = [r for r in reviews
+                             if r.get("author", {}).get("login", "") == author
+                             and r.get("submittedAt", "") > my_last_ts]
+            owner_responded = len(owner_reviews) > 0
+        pr_data["ownerResponded"] = owner_responded
 
         if author == current_user:
             mine.append(pr_data)
