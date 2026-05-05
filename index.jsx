@@ -52,19 +52,45 @@ export const render = ({ output, error }) => {
     } catch(e) {}
   }
 
-  function byAuthor(a, b) { return a.author.localeCompare(b.author); }
-  var toReviewVis = (showDrafts ? toReview : toReview.filter(function(p){ return !p.isDraft; })).sort(byAuthor);
-  var mineVis     = (showDrafts ? mine     : mine.filter(function(p){ return !p.isDraft; })).sort(byAuthor);
-  var totalDrafts = toReview.filter(function(p){ return p.isDraft; }).length
-                  + mine.filter(function(p){ return p.isDraft; }).length;
+  var currentUser = mine.length > 0 ? mine[0].author : "";
+  var allPRs = toReview.concat(mine);
+  var allVisible = showDrafts ? allPRs : allPRs.filter(function(p){ return !p.isDraft; });
+  var totalDrafts = allPRs.filter(function(p){ return p.isDraft; }).length;
 
-  var isEmpty = !hasError && toReview.length === 0 && mine.length === 0;
+  function sortPRs(prs) {
+    return prs.slice().sort(function(a, b) {
+      var aMe = a.author === currentUser ? 1 : 0;
+      var bMe = b.author === currentUser ? 1 : 0;
+      if (aMe !== bMe) return aMe - bMe;
+      return a.author.localeCompare(b.author);
+    });
+  }
+
+  var isEmpty = !hasError && allPRs.length === 0;
+  var hasResponses = allVisible.some(function(p){ return p.ownerResponded; });
+
+  function groupByRepo(prs) {
+    var groups = {};
+    prs.forEach(function(pr) {
+      var repo = pr.repo || "unknown";
+      if (!groups[repo]) groups[repo] = [];
+      groups[repo].push(pr);
+    });
+    return Object.keys(groups).sort().map(function(repo) {
+      var prs = groups[repo].sort(function(a, b) {
+        var aReviewed = a.myReviewState ? 1 : 0;
+        var bReviewed = b.myReviewState ? 1 : 0;
+        return aReviewed - bReviewed || a.author.localeCompare(b.author);
+      });
+      return { repo: repo, prs: prs };
+    });
+  }
 
   function reviewIcon(s) {
     if (s === "APPROVED")          return "✅";
     if (s === "CHANGES_REQUESTED") return "🔁";
-    if (s === "COMMENTED")         return "💬";
-    return "👀";
+    if (s === "COMMENTED")         return "✍️";
+    return "👁";
   }
 
   function daysLabel(d) {
@@ -75,6 +101,8 @@ export const render = ({ output, error }) => {
     var pr = props.pr;
     var myReview = props.myReview;
     var isSelected = selectedPR === pr.number;
+    var isWaiting = !!props.myReview && !pr.ownerResponded;
+    var isOwn = !!props.isOwn;
 
     function toggleSelect(e) {
       e.stopPropagation();
@@ -82,9 +110,12 @@ export const render = ({ output, error }) => {
     }
 
     return (
-      <div className={"pr-row-wrap" + (isSelected ? " pr-selected" : "")}>
+      <div className={"pr-row-wrap" + (isSelected ? " pr-selected" : "") + (isWaiting ? " pr-reviewed" : "") + (isOwn ? " pr-own" : "")}>
         <div className="pr-row" data-tooltip={"@" + pr.author + "\n" + pr.branch} onClick={toggleSelect}>
-          <span className="pr-num">#{pr.number}</span>
+          <span className="pr-num">
+          #{pr.number}
+          {pr.ownerResponded && <span className="pr-responded" title="El owner respondió">🔔</span>}
+        </span>
           {pr.isDraft && <span className="pr-draft">draft </span>}
           <span className="pr-title">{pr.title}</span>
           <span className="pr-meta">
@@ -178,6 +209,11 @@ export const render = ({ output, error }) => {
         }
         .pr-toggle:hover { color: rgba(255,255,255,0.7); }
         .pr-section { margin-top: 10px; }
+        .pr-repo-title {
+          font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+          color: rgba(255,255,255,0.5); margin: 8px 0 4px;
+          padding-bottom: 3px; border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
         .pr-section-title {
           font-size: 10.8px; font-weight: 700; letter-spacing: 1px;
           color: rgba(255,255,255,0.35); margin-bottom: 6px;
@@ -189,7 +225,8 @@ export const render = ({ output, error }) => {
         }
         .pr-row:last-child { border-bottom: none; }
         .pr-row:hover { background: rgba(255,255,255,0.04); border-radius: 6px; }
-        .pr-num { font-size: 12px; color: rgba(255,255,255,0.35); flex-shrink: 0; font-family: monospace; }
+        .pr-num { font-size: 12px; color: rgba(255,255,255,0.35); flex-shrink: 0; font-family: monospace; display: flex; align-items: center; gap: 3px; }
+        .pr-responded { font-size: 11px; }
         .pr-draft { font-size: 10.8px; color: rgba(255,255,255,0.35); flex-shrink: 0; }
         .pr-title {
           flex: 1; white-space: nowrap; overflow: hidden;
@@ -206,6 +243,10 @@ export const render = ({ output, error }) => {
         .pr-row-wrap:last-child { border-bottom: none; }
         .pr-row-wrap .pr-row { border-bottom: none; }
         .pr-selected { background: rgba(255,255,255,0.04); border-radius: 8px; }
+        .pr-reviewed { opacity: 0.45; }
+        .pr-reviewed:hover { opacity: 0.75; }
+        .pr-own .pr-num { color: #93C5FD; }
+        .pr-own .pr-title { color: #93C5FD; opacity: 0.9; }
         .pr-chevron { font-size: 9px; opacity: 0.35; margin-left: 4px; flex-shrink: 0; }
         .pr-detail {
           padding: 8px 10px 10px;
@@ -253,13 +294,14 @@ export const render = ({ output, error }) => {
         <div className="pr-badge"
           onClick={function(){ run(expanded ? 'rm -f /tmp/pr_expanded /tmp/pr_selected' : 'touch /tmp/pr_expanded'); }}>
           <span>🔀</span>
+          {hasResponses && <span title="Hay PRs con respuesta del owner">🔔</span>}
           {hasError && <span style={{color:"rgba(255,255,255,0.5)", fontSize:"12px"}}>configurar repos →</span>}
           {isEmpty  && <span style={{color:"rgba(255,255,255,0.5)", fontSize:"12px"}}>sin PRs 🎉</span>}
-          {!hasError && !isEmpty && <span className="pr-count review">{toReviewVis.length} revisar</span>}
-          {!hasError && !isEmpty && <span className="pr-count mine">{mineVis.length} esperando</span>}
+          {!hasError && !isEmpty && <span className="pr-count review">{toReview.filter(function(p){return !p.isDraft;}).length} revisar</span>}
+          {!hasError && !isEmpty && <span className="pr-count mine">{mine.filter(function(p){return !p.isDraft;}).length} míos</span>}
           <span style={{marginLeft:"auto", opacity:0.4, fontSize:"10px"}}>{expanded ? "▲" : "▼"}</span>
           <span className="pr-refresh" title="Refrescar ahora"
-            onClick={function(e){ e.stopPropagation(); run('/bin/rm -f /tmp/pr_cache.json'); }}>↺</span>
+            onClick={function(e){ e.stopPropagation(); run('/bin/rm -f /tmp/pr_cache.json /tmp/pr_cache_lock'); }}>↺</span>
         </div>
 
         {expanded && hasError && (
@@ -278,21 +320,17 @@ export const render = ({ output, error }) => {
                 {showDrafts ? "▾ ocultar drafts" : "▸ mostrar " + totalDrafts + " draft" + (totalDrafts > 1 ? "s" : "")}
               </div>
             )}
-            {toReviewVis.length > 0 && (
-              <div className="pr-section">
-                <div className="pr-section-title">A REVISAR</div>
-                {toReviewVis.map(function(pr){ return <PRRow key={pr.number} pr={pr} myReview={pr.myReviewState} />;})}
-              </div>
-            )}
-            {mineVis.length > 0 && (
-              <div className="pr-section">
-                <div className="pr-section-title">MIS PRs</div>
-                {mineVis.map(function(pr){ return <PRRow key={pr.number} pr={pr} />; })}
-              </div>
-            )}
-            {toReviewVis.length === 0 && mineVis.length === 0 && (
-              <div style={{padding:"8px 0", color:"rgba(255,255,255,0.4)", fontSize:"12px"}}>Sin PRs activos 🎉</div>
-            )}
+            {allVisible.length > 0
+              ? groupByRepo(allVisible).map(function(g) { return (
+                  <div key={g.repo} className="pr-section">
+                    <div className="pr-repo-title">{g.repo}</div>
+                    {sortPRs(g.prs).map(function(pr){
+                      return <PRRow key={pr.number} pr={pr} myReview={pr.myReviewState} isOwn={pr.author === currentUser} />;
+                    })}
+                  </div>
+                ); })
+              : <div style={{padding:"8px 0", color:"rgba(255,255,255,0.4)", fontSize:"12px"}}>Sin PRs activos 🎉</div>
+            }
           </div>
         )}
       </div>
