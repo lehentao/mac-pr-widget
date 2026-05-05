@@ -42,18 +42,37 @@ def waiting_since(pr):
     now = datetime.now(timezone.utc)
     return (now - dt).days
 
+def is_human(login):
+    return login.endswith("_meli")
+
 def review_summary(reviews):
     states = {"APPROVED": 0, "CHANGES_REQUESTED": 0, "COMMENTED": 0}
     seen = {}
     for r in sorted(reviews, key=lambda x: x.get("submittedAt", "")):
         login = r.get("author", {}).get("login", "")
         state = r.get("state", "")
-        if state in states:
-            seen[login] = state
+        if state not in states:
+            continue
+        # Bots solo cuentan si encuentran issues (CHANGES_REQUESTED)
+        if not is_human(login) and state != "CHANGES_REQUESTED":
+            continue
+        seen[login] = state
     for s in seen.values():
         if s in states:
             states[s] += 1
     return states
+
+def thread_stats(pr, current_user):
+    threads = pr.get("reviewThreads", {}).get("nodes", [])
+    total = len(threads)
+    resolved = sum(1 for t in threads if t.get("isResolved"))
+    my_unresolved = sum(
+        1 for t in threads
+        if not t.get("isResolved")
+        and any(c.get("author", {}).get("login") == current_user
+                for c in t.get("comments", {}).get("nodes", []))
+    )
+    return total, resolved, my_unresolved
 
 def serialize_pr(pr, days, reviews, owner, repo_name):
     labels = ",".join(l["name"] for l in pr.get("labels", {}).get("nodes", []))
@@ -61,7 +80,7 @@ def serialize_pr(pr, days, reviews, owner, repo_name):
     reviewer_logins = list(dict.fromkeys([
         r.get("author", {}).get("login", "")
         for r in pr.get("reviews", {}).get("nodes", [])
-        if r.get("author", {}).get("login", "")
+        if is_human(r.get("author", {}).get("login", ""))
     ]))
     return {
         "number": pr["number"],
@@ -76,7 +95,10 @@ def serialize_pr(pr, days, reviews, owner, repo_name):
         "commented": rev["COMMENTED"],
         "reviewers": reviewer_logins[:5],
         "url": f"https://github.com/{owner}/{repo_name}/pull/{pr['number']}",
-        "repo": repo_name
+        "repo": repo_name,
+        "threadsTotal": 0,
+        "threadsResolved": 0,
+        "myUnresolved": 0
     }
 
 GRAPHQL_QUERY = """
@@ -99,6 +121,16 @@ query($owner: String!, $repo: String!) {
             author { login }
             state
             submittedAt
+          }
+        }
+        reviewThreads(first: 30) {
+          nodes {
+            isResolved
+            comments(first: 5) {
+              nodes {
+                author { login }
+              }
+            }
           }
         }
       }
@@ -150,15 +182,13 @@ def fetch_prs(repo_path):
         pr_data = serialize_pr(pr, days, reviews, owner, repo_name)
         pr_data["myReviewState"] = my_review_state
 
-        # Detectar si el owner respondió después del último review del usuario
-        owner_responded = False
-        if my_reviews:
-            my_last_ts = my_reviews[-1].get("submittedAt", "")
-            owner_reviews = [r for r in reviews
-                             if r.get("author", {}).get("login", "") == author
-                             and r.get("submittedAt", "") > my_last_ts]
-            owner_responded = len(owner_reviews) > 0
-        pr_data["ownerResponded"] = owner_responded
+        # Stats de threads
+        t_total, t_resolved, my_unresolved = thread_stats(pr, current_user)
+        pr_data["threadsTotal"]    = t_total
+        pr_data["threadsResolved"] = t_resolved
+        pr_data["myUnresolved"]    = my_unresolved
+        # 🔔 si tengo threads sin resolver
+        pr_data["ownerResponded"]  = my_unresolved > 0
 
         if author == current_user:
             mine.append(pr_data)

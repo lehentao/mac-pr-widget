@@ -120,10 +120,15 @@ export const render = ({ output, error }) => {
           <span className="pr-title">{pr.title}</span>
           <span className="pr-meta">
             <span className="pr-days">{daysLabel(pr.days)}</span>
+            {pr.threadsTotal > 0 && (
+              <span className="pr-stat" style={{opacity: pr.threadsResolved === pr.threadsTotal ? 0.4 : 1}}>
+                {"🧵" + pr.threadsResolved + "/" + pr.threadsTotal}
+              </span>
+            )}
             {pr.approved > 0         && <span className="pr-stat">{"✅" + pr.approved}</span>}
             {pr.changesRequested > 0 && <span className="pr-stat">{"🔁" + pr.changesRequested}</span>}
             {pr.commented > 0        && <span className="pr-stat">{"💬" + pr.commented}</span>}
-            {pr.approved === 0 && pr.changesRequested === 0 && pr.commented === 0
+            {pr.approved === 0 && pr.changesRequested === 0 && pr.commented === 0 && pr.threadsTotal === 0
               && <span className="pr-stat" style={{opacity:0.4}}>😶</span>}
             {myReview && <span className="pr-my">{reviewIcon(myReview)}</span>}
           </span>
